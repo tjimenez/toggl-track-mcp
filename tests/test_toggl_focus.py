@@ -463,3 +463,33 @@ def test_project_report_includes_task_time_once_the_task_has_a_project():
     attributed = [e for e in entries if entry_project_id(e, task_projects) == NAME_PROJECT]
     assert len(attributed) == 2
     assert format_duration(sum(e["duration"] for e in attributed)) == "2h 15m"
+
+
+def test_unattributed_note_reconciles_each_day_not_just_the_total():
+    """A reader comparing against a report that folded this time in needs per-day figures.
+
+    The acceptance case (project Name, 24-28 Aug 2026) differs from the project
+    total on two specific days, so a single week-level figure is not enough to
+    reconcile the two reports.
+    """
+    from server import _unattributed_note  # noqa: E402
+
+    note = _unattributed_note(
+        [
+            task_entry("2026-08-24T14:00:00Z", 1800, task_name="Planning"),
+            task_entry("2026-08-24T18:00:00Z", 2220, task_id=14338919, task_name="Bugs Fixing"),
+            task_entry("2026-08-26T15:00:00Z", 1320, task_id=14503635, task_name="Meeting"),
+            task_entry("2026-08-26T17:00:00Z", 2580, task_id=14503635, task_name="Meeting"),
+        ]
+    )
+
+    assert "Not counted above: 2h 12m" in note
+    assert "• 2026-08-24: 1h 07m" in note
+    assert "• 2026-08-26: 1h 05m" in note
+    assert "2026-08-25" not in note
+
+
+def test_unattributed_note_is_empty_when_everything_is_attributed():
+    from server import _unattributed_note  # noqa: E402
+
+    assert _unattributed_note([]) == ""
