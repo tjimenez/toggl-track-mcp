@@ -1,6 +1,8 @@
-# Toggl Track MCP Server
+# Toggl Focus MCP Server
 
-A Model Context Protocol (MCP) server for Toggl Track time tracking integration. This server allows Claude and other MCP clients to interact with your Toggl Track account to manage projects and time entries.
+A Model Context Protocol (MCP) server for Toggl time tracking integration. This server allows Claude and other MCP clients to interact with your Toggl account to manage projects and time entries.
+
+> **Toggl 2.0 (Focus).** Accounts that migrated to Toggl Focus are no longer served by the legacy Toggl Track API — it returns data only up to the migration date, so reports after it come back empty. This server targets the Focus API at `https://focus.toggl.com/api`. See [the Focus API docs](https://engineering.toggl.com/docs/focus/).
 
 > This server is 100% written by Claude Code, except for BUILD_APP.md, which I wrote to guide the creation of the server
 > This has not be extensively tested (honestly, I've barely read the code!) so improvements can definitely be made.
@@ -9,25 +11,29 @@ A Model Context Protocol (MCP) server for Toggl Track time tracking integration.
 
 ## Features
 
-- **Get Projects**: Retrieve all projects from your Toggl Track account
-- **Get Workspaces**: List all workspaces associated with your account
+- **Get Projects**: Retrieve all projects from your Toggl workspace
+- **Get Workspaces**: Report the organization and workspace the API key resolves to
 - **Get Time Entries**: Detailed time entries with filtering by date range and project
-- **Time Summary**: Aggregated time reports by project with percentages
+- **Time Summary**: Aggregated time reports by project, day and activity
 - **Current Timer**: Check what's currently running and elapsed time
 - **Timer Control**: Start new timers and stop current running timers
 - **Task Management**: Create and retrieve project tasks with time estimates
 - **Search Entries**: Find time entries by description text
 - **Smart Prompts**: Pre-built conversation starters for common time tracking queries
-- Secure API token authentication
+- Bearer authentication with a key read from the environment
+- Organization/workspace discovered from the API rather than hardcoded
+- Quota-aware: honours HTTP 402 and the `X-Toggl-Quota-*` headers
 - Formatted, readable output for LLM consumption
 
 ## Quick Start
 
-### 1. Get Your Toggl Track API Token
+### 1. Get Your Toggl Focus API Key
 
-1. Go to your [Toggl Track profile settings](https://track.toggl.com/profile)
-2. Copy your API token from the "API Token" section
-3. Keep this token handy for the configuration step
+1. Go to [Toggl Focus settings](https://focus.toggl.com/settings)
+2. Create an API key (it looks like `toggl_sk_...`)
+3. Keep this key handy for the configuration step
+
+> **Only one key is active per user.** Creating a new key revokes the previous one, so update every integration that uses it in the same step.
 
 ### 2. Build the Docker Image
 
@@ -48,25 +54,25 @@ Add the server to your Claude Desktop configuration file:
 ```json
 {
   "mcpServers": {
-    "Toggl Track": {
+    "Toggl": {
       "command": "docker",
       "args": [
         "run",
         "-i",
         "--rm",
         "-e",
-        "TOGGL_API_TOKEN",
+        "TOGGL_API_KEY",
         "toggl-track-mcp"
       ],
       "env": {
-        "TOGGL_API_TOKEN": "your_api_token_here"
+        "TOGGL_API_KEY": "toggl_sk_your_api_key_here"
       }
     }
   }
 }
 ```
 
-**Important:** Replace `"your_api_token_here"` with your actual Toggl Track API token.
+**Important:** Replace `"toggl_sk_your_api_key_here"` with your actual Toggl Focus API key. Prefer injecting it from your secret store rather than writing it into a versioned config file.
 
 ### 4. Restart Claude Desktop
 
@@ -75,7 +81,7 @@ After updating the configuration, restart Claude Desktop to load the new MCP ser
 ### 5. Verify Installation
 
 Once restarted, you should be able to ask Claude questions like:
-- "What projects do I have in Toggl Track?"
+- "What projects do I have in Toggl?"
 - "Start a timer for 'Code review'"
 - "What's my current timer status?"
 
@@ -103,7 +109,7 @@ pip install -r requirements.txt
 Set your API token:
 
 ```bash
-export TOGGL_API_TOKEN="your_api_token_here"
+export TOGGL_API_KEY="toggl_sk_your_api_key_here"
 ```
 
 ### Testing with MCP Inspector
@@ -118,20 +124,16 @@ This opens the MCP Inspector for interactive testing.
 
 ### `get_projects`
 
-Retrieves all projects from your Toggl Track account with details including:
+Retrieves all projects from your Toggl workspace with details including:
 
-- Project name
-- Workspace ID
-- Associated client
-- Color coding
-- Privacy settings
+- Project name and ID
+- Active/archived state
+- Total tracked time
 
 ### `get_workspaces`
 
-Lists all workspaces associated with your Toggl Track account with:
-
-- Workspace name
-- Workspace ID
+Reports the organization and workspace this API key operates on. The Focus API has no
+workspace-listing endpoint — a key is scoped to the user's current workspace.
 
 ### `get_time_entries`
 
@@ -244,7 +246,7 @@ Once installed in Claude Desktop, you can ask:
 
 ### Project & Workspace Queries
 
-- "What projects do I have in Toggl Track?"
+- "What projects do I have in Toggl?"
 - "Show me my Toggl workspaces"
 - "List all my time tracking projects"
 
@@ -272,16 +274,40 @@ Once installed in Claude Desktop, you can ask:
 
 ## API Reference
 
-This server uses the [Toggl Track API v9](https://developers.track.toggl.com/docs/). Key endpoints used:
+This server uses the [Toggl Focus API](https://engineering.toggl.com/docs/focus/), based at
+`https://focus.toggl.com/api`. Every data path is scoped by organization and workspace.
 
-- `GET /api/v9/me/projects` - Get user projects
-- `GET /api/v9/workspaces` - Get user workspaces
-- `GET /api/v9/me/time_entries` - Get time entries
-- `GET /api/v9/me/time_entries/current` - Get current running timer
-- `POST /api/v9/workspaces/{id}/time_entries` - Start new timer
-- `PATCH /api/v9/workspaces/{id}/time_entries/{id}/stop` - Stop timer
-- `GET /api/v9/workspaces/{id}/projects/{id}/tasks` - Get project tasks
-- `POST /api/v9/workspaces/{id}/projects/{id}/tasks` - Create new task
+| Purpose | Endpoint |
+|---|---|
+| Discover scope | `GET /users/me/settings` |
+| List projects | `GET /organizations/{org}/workspaces/{ws}/projects` |
+| List time entries | `GET /organizations/{org}/workspaces/{ws}/time-entries/stream` |
+| List tasks | `GET /organizations/{org}/workspaces/{ws}/tasks/stream` |
+| Create task | `POST /organizations/{org}/workspaces/{ws}/tasks` |
+| Current timer | `GET /organizations/{org}/workspaces/{ws}/tracking/current` |
+| Start timer | `POST /organizations/{org}/workspaces/{ws}/tracking/start` |
+| Stop timer | `POST /organizations/{org}/workspaces/{ws}/tracking/stop` |
+
+The `/stream` endpoints return a whole date range in one response, which is what keeps a
+report inside the hourly quota.
+
+### Scope discovery
+
+The workspace comes from `current_workspace_id` in `GET /users/me/settings`. The Focus API
+exposes no endpoint that lists organizations, so the organization is read from the
+per-organization maps in that same payload and verified against the API before use. Set
+`TOGGL_ORGANIZATION_ID` / `TOGGL_WORKSPACE_ID` to skip discovery.
+
+### Projects, tasks and time entries
+
+A Focus time entry is attributed to a project in one of two ways:
+
+- **Taskless entries** carry `project_id` (and an inlined `project`) directly.
+- **Task-bound entries** carry neither; the project comes from the task.
+
+A Focus task need not belong to a project. Time tracked against such a task cannot be
+attributed to any project, so the reporting tools list it separately instead of folding it
+into a project's total.
 
 ## Development
 
@@ -289,39 +315,57 @@ This server uses the [Toggl Track API v9](https://developers.track.toggl.com/doc
 
 ```
 toggl-track-mcp/
-├── server.py              # Main MCP server implementation
+├── server.py              # MCP tools and prompts
+├── toggl_focus.py         # Toggl Focus API client and helpers
+├── tests/                 # Test suite
 ├── requirements.txt       # Python dependencies
-├── .env.example          # Environment variable template
-└── README.md             # This file
+├── .env.example           # Environment variable template
+└── README.md              # This file
+```
+
+### Running the tests
+
+```bash
+pip install -r requirements.txt pytest pytest-asyncio
+pytest
 ```
 
 ### Adding New Features
 
-To extend this server with additional Toggl Track functionality:
+To extend this server with additional Toggl functionality:
 
-1. Add new methods to the `TogglClient` class
+1. Add new methods to the `TogglFocusClient` class
 2. Create new `@mcp.tool()` decorated functions
 3. Handle authentication and error cases
 4. Update this README with the new capabilities
 
 ## Authentication
 
-This server uses Toggl Track's API token authentication method. The token should be provided via the `TOGGL_API_TOKEN` environment variable.
+This server authenticates with `Authorization: Bearer <key>`, reading the key from the
+`TOGGL_API_KEY` environment variable (`TOGGL_API_TOKEN` is still accepted for continuity).
 
-**Security Note**: Never commit your API token to version control. Always use environment variables or secure configuration management.
+**Security Note**: Never commit your API key to version control. Always use environment
+variables or secure configuration management. Remember that Toggl allows a single active
+key per user — rotating it revokes the old one, so update every consumer at the same time.
 
 ## Error Handling
 
 The server includes comprehensive error handling for:
 
-- Missing API token configuration
+- Missing API key configuration
+- Revoked API keys (HTTP 401)
+- Exhausted quota (HTTP 402)
 - Network connectivity issues
 - API authentication failures
 - Malformed API responses
 
-## Rate Limiting
+## Quota
 
-Toggl Track API has rate limiting (approximately 1 request per second). The server respects these limits and provides appropriate error messages if limits are exceeded.
+The Focus API bills a request quota per user per hour (Free: 30 requests/hour; higher on paid
+plans). When it runs out the API answers `HTTP 402` and reports `X-Toggl-Quota-Remaining` and
+`X-Toggl-Quota-Resets-In`. The server surfaces that as a clear error including the reset time,
+caches scope/project/task lookups within a call, and uses the `/stream` endpoints so a date
+range costs one request rather than one per page.
 
 ## Contributing
 
