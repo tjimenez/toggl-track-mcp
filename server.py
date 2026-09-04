@@ -98,15 +98,26 @@ async def _entries_for_range(
 
 
 def _unattributed_note(unattributed: List[Dict[str, Any]]) -> str:
-    """Explain time that belongs to a task with no project, so totals reconcile."""
+    """Explain time that belongs to a task with no project, so totals reconcile.
+
+    The breakdown is per day as well as in total: a reader comparing this report
+    against one that did fold this time into the project needs to reconcile each
+    day, not just the week.
+    """
     if not unattributed:
         return ""
     total = sum(e.get("duration", 0) for e in unattributed)
     labels = sorted({entry_label(e) for e in unattributed})
-    return (
+    note = (
         f"\n_Not counted above: {format_duration(total)} tracked against tasks with no project "
         f"({', '.join(labels)}). Assign those tasks to a project for them to appear in a project report._\n"
     )
+    note += "\n_Unattributed by day:_\n"
+    per_day = _group_by_local_date(unattributed)
+    for date in sorted(per_day):
+        day_total = sum(max(e.get("duration", 0), 0) for e in per_day[date])
+        note += f"• {date}: {format_duration(day_total)}\n"
+    return note
 
 
 def _group_by_local_date(entries: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
