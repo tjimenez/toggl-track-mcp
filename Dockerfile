@@ -6,8 +6,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the server script
-COPY server.py .
+# Copy the server
+COPY server.py toggl_focus.py ./
 
 # Run the server
 CMD ["python", "server.py"]
